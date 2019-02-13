@@ -1,6 +1,8 @@
 #if UNITY_EDITOR
 using UnityEngine;
 using UnityEditor;
+using System.IO;
+using System.Collections.Generic;
 
 namespace UMA.CharacterSystem
 {
@@ -16,6 +18,13 @@ namespace UMA.CharacterSystem
                 UMAAssetIndexer.Instance.OnPostprocessAllAssets(importedAssets, deletedAssets, movedAssets, movedFromAssetPaths);
             }
         }
-    }
+
+		public void OnPostprocessAssetbundleNameChanged(string assetPath, string previousAssetBundleName, string newAssetBundleName)
+		{
+			UMAAssetIndexer.Instance.OnPostprocessAssetbundleNameChanged(assetPath, previousAssetBundleName, newAssetBundleName);
+		}
+
+	}
+
 }
 #endif

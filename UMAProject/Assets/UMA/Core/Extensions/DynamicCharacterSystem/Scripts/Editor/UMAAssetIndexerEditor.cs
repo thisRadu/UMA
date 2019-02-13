@@ -10,6 +10,7 @@ namespace UMA.CharacterSystem.Editors
 	public class UMAAssetIndexerEditor : EditorWindow 
 	{
 		Dictionary<System.Type, bool> Toggles = new Dictionary<System.Type, bool>();
+		Dictionary<System.Type, bool> AssetBundleToggles = new Dictionary<System.Type, bool>();
 		UMAAssetIndexer _UAI;
 		List<Object> AddedDuringGui = new List<Object>();  
 		List<System.Type> AddedTypes = new List<System.Type>();
@@ -25,6 +26,10 @@ namespace UMA.CharacterSystem.Editors
 		public string Filter = "";
 		public bool IncludeText;
 		int NotInBuildCount = 0;
+
+		//The global index also stores references to SlotDataAssets/OverlayDataAssets/RaceDatas because this speeds up 'SimulationMode' in the editor
+		//these references are not used or available in a build. Use DynamicAssetLoader to find and load assets from AssetBundles
+		bool showAssetBundleIndexedItems = true;
 
 		UMAAssetIndexer UAI 
 		{
@@ -216,6 +221,8 @@ namespace UMA.CharacterSystem.Editors
 			foreach (System.Type t in Types)
 			{
 				Toggles[t] = Value;
+				if(t == typeof(SlotDataAsset) || t == typeof(OverlayDataAsset) || t == typeof(RaceData))
+				AssetBundleToggles[t] = Value;
 			}
 		}
 
@@ -224,6 +231,13 @@ namespace UMA.CharacterSystem.Editors
 			if (Event.current.type == EventType.Layout)
 			{
 				Cleanup();
+			}
+			//add the assetBundlesRefs when we inspect this if they have not been added already
+			//If there are no assetBundles in the project this should be near instant
+			//Otherwise there will be a loading bar
+			if(UAI.AssetBundleSerializedItems.Count == 0)
+			{
+				UAI.RefreshAssetBundlesInfo(true);
 			}
 
 			ShowTypes();
@@ -341,6 +355,25 @@ namespace UMA.CharacterSystem.Editors
 				GUILayout.Label("All items appear OK. " +bldMessage);
 			}
 			GUILayout.EndHorizontal();
+			GUILayout.Space(10);
+
+			showAssetBundleIndexedItems = EditorGUILayout.ToggleLeft("Show AssetBundle Indexed Items", showAssetBundleIndexedItems);
+
+			if (showAssetBundleIndexedItems)
+			{
+				GUIHelper.BeginVerticalPadded(10, new Color(0.75f, 0.875f, 1f, 0.3f));
+
+				EditorGUILayout.HelpBox("The following data is generated automatically based on the assets you have assigned to assetBundles in your project. It is only used at edit time to speed up 'SimulationMode' for assetBundles and none of these assets are included in your build. To remove assets from here you need to unassign them (or their containing folders) from any assetBundles.", MessageType.Info);
+
+				foreach (System.Type t in Types)
+				{
+					if (t == typeof(SlotDataAsset) || t == typeof(OverlayDataAsset) || t == typeof(RaceData)) // Somewhere, a kitten died because I typed that.
+					{
+						ShowAssetBundlesArray(t);
+					}
+				}
+				GUIHelper.EndVerticalPadded(10);
+			}
 		}
 
 
@@ -354,7 +387,10 @@ namespace UMA.CharacterSystem.Editors
 
             Dictionary<string, AssetItem> TypeDic = UAI.GetAssetDictionary(CurrentType);
 
-            if (!TypeCheckboxes.ContainsKey(CurrentType))
+			if (TypeDic == null)
+				return false;
+
+			if (!TypeCheckboxes.ContainsKey(CurrentType))
             {
                 TypeCheckboxes.Add(CurrentType, new List<bool>());
             }
@@ -387,9 +423,8 @@ namespace UMA.CharacterSystem.Editors
             NotInBuildCount += NotInBuild;
             GUILayout.BeginHorizontal(EditorStyles.toolbarButton);
             GUILayout.Space(10);
-            Toggles[CurrentType] = EditorGUILayout.Foldout(Toggles[CurrentType], CurrentType.Name + ":  " + VisibleItems + "/" + TypeDic.Count + " Item(s). " + NotInBuild + " Not in build.");
-            GUILayout.EndHorizontal();
-
+			Toggles[CurrentType] = EditorGUILayout.Foldout(Toggles[CurrentType], CurrentType.Name + ":  " + VisibleItems + "/" + TypeDic.Count + " Item(s). " + NotInBuild + " Not in build.");
+			GUILayout.EndHorizontal();
 
 
             if (Toggles[CurrentType])
@@ -522,7 +557,75 @@ namespace UMA.CharacterSystem.Editors
             return NotFound;
         }
 
-        private void ForceSerialize(System.Type type, int i, AssetItem a)
+		public bool ShowAssetBundlesArray(System.Type CurrentType)
+		{
+
+			Dictionary<string, AssetItem> TypeDic = UAI.GetAssetBundleAssetDictionary(CurrentType);
+
+			if (TypeDic == null)
+				return false;
+
+
+			List<AssetItem> Items = new List<AssetItem>();
+			Items.AddRange(TypeDic.Values);
+			int NotInBuild = 0;
+			//Nothing should be in the build- if anything is we have a problem somewhere with the way assets are being added
+			foreach (AssetItem ai in Items)
+			{
+				if (ai._SerializedItem == null)
+				{
+					NotInBuild++;
+				}
+			}
+
+			GUILayout.BeginHorizontal(EditorStyles.toolbarButton);
+			GUILayout.Space(10);
+			AssetBundleToggles[CurrentType] = EditorGUILayout.Foldout(AssetBundleToggles[CurrentType], CurrentType.Name + ":  " + TypeDic.Count + " Item(s).");
+			GUILayout.EndHorizontal();
+			if (AssetBundleToggles[CurrentType])
+			{
+				Items.Sort();
+				Dictionary<string, List<AssetItem>> itemsByBundle = new Dictionary<string, List<AssetItem>>();
+				foreach (AssetItem ai in Items)
+				{
+					if (string.IsNullOrEmpty(ai._AssetBundleName))
+					{
+						if (!itemsByBundle.ContainsKey("<UnknownBundle>"))
+							itemsByBundle.Add("<UnknownBundle>", new List<AssetItem>());
+						itemsByBundle["<UnknownBundle>"].Add(ai);
+					}
+					else
+					{
+						if (!itemsByBundle.ContainsKey(ai._AssetBundleName))
+							itemsByBundle.Add(ai._AssetBundleName, new List<AssetItem>());
+						itemsByBundle[ai._AssetBundleName].Add(ai);
+					}
+				}
+				GUIHelper.BeginVerticalPadded(5, new Color(0.75f, 0.875f, 1f));
+				foreach(KeyValuePair<string, List<AssetItem>> kp in itemsByBundle)
+				{
+					EditorGUILayout.LabelField("BundleName: "+kp.Key);
+					foreach (AssetItem ai in kp.Value)
+					{
+						GUILayout.BeginHorizontal(EditorStyles.textField);
+						EditorGUILayout.LabelField(ai._Name);
+						GUILayout.EndHorizontal();
+					}
+				}
+				GUIHelper.EndVerticalPadded(5);
+			}
+			if(NotInBuild != Items.Count)
+			{
+				EditorGUILayout.HelpBox("Some of these assets were referenced and will be included in your build. Click the button below to fix this", MessageType.Warning);
+				if(GUILayout.Button("Fix AssetBundle Refs"))
+				{
+					UAI.RefreshAssetBundlesInfo(true);
+				}
+			}
+			return false;
+		}
+
+		private void ForceSerialize(System.Type type, int i, AssetItem a)
         {
             EditorUtility.SetDirty(a.Item);
         }

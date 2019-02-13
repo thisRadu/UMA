@@ -20,6 +20,7 @@ namespace UMA
 		public string _Guid;
         public bool IsResource;
         public bool IsAssetBundle;
+		public string _AssetBundleName;
         #endregion
         #region Properties
         public System.Type _Type
