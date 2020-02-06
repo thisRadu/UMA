@@ -13,17 +13,23 @@ namespace UMA
 			base.Start();
 			if (loadOnStart)
 			{
-				if (umaAdditionalRecipes == null || umaAdditionalRecipes.Length == 0)
-				{
-					Load(umaRecipe);
-				}
-				else
-				{
-					Load(umaRecipe, umaAdditionalRecipes);
-				}
+				DynamicLoad();
 			}
 		}
-	#if UNITY_EDITOR
+
+		public void DynamicLoad()
+		{
+			if (umaAdditionalRecipes == null || umaAdditionalRecipes.Length == 0)
+			{
+				Load(umaRecipe);
+			}
+			else
+			{
+				Load(umaRecipe, umaAdditionalRecipes);
+			}
+		}
+
+#if UNITY_EDITOR
 		[UnityEditor.MenuItem("GameObject/UMA/Create New Dynamic Avatar", false, 10)]
 		static void CreateDynamicAvatarMenuItem()
 		{
@@ -33,6 +39,6 @@ namespace UMA
 			da.umaGenerator = Component.FindObjectOfType<UMAGeneratorBase>();
 			UnityEditor.Selection.activeGameObject = res;
 		}
-	#endif
+#endif
 	}
 }
