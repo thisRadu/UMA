@@ -1237,7 +1237,7 @@ namespace UMA
 					if (ai != null && ai.IsAlwaysLoaded == false)
 					{
 						// is this a utility slot? if so, we need to not delete it as an orphan. 
-						if (sd.asset.meshData == null && sd.OverlayCount == 0)
+						if (sd.asset.isUtilitySlot)
 						{
 							ai.IsAlwaysLoaded = true;
 						}
