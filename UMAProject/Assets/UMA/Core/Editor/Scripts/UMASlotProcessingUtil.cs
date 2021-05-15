@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEditor;
 using System.Collections.Generic;
 using Unity.Collections;
+using UMA.CharacterSystem;
 
 namespace UMA.Editors
 {
@@ -51,15 +52,15 @@ namespace UMA.Editors
                 resultingMesh = (Mesh)GameObject.Instantiate(resultingSkinnedMesh.sharedMesh);
             }
 
-			CountBoneweights(resultingMesh);
+			//CountBoneweights(resultingMesh);
 
-            var usedBonesDictionary = CompileUsedBonesDictionary(resultingMesh);
+            var usedBonesDictionary = CompileUsedBonesDictionary(resultingMesh, new List<int>());
             if (usedBonesDictionary.Count != resultingSkinnedMesh.bones.Length)
             {
                 resultingMesh = BuildNewReduceBonesMesh(resultingMesh, usedBonesDictionary);
             }
 
-			CountBoneweights(resultingMesh);
+			//CountBoneweights(resultingMesh);
 
 			string meshAssetName = path + '/' + mesh.name + ".asset";
 
@@ -92,7 +93,7 @@ namespace UMA.Editors
                     resultingSkinnedMesh.bones = BuildNewReducedBonesList(resultingSkinnedMesh.bones, usedBonesDictionary);
                 }
                 resultingSkinnedMesh.sharedMesh = resultingMesh;
-				CountBoneweights(resultingMesh);
+				//CountBoneweights(resultingMesh);
             }
 
 			string SkinnedName = path + '/' + assetName + "_Skinned.prefab";
@@ -120,14 +121,7 @@ namespace UMA.Editors
 		}
 
 
-		public static void CountBoneweights(Mesh theMesh)
-        {
-			NativeArray<BoneWeight1> weights = theMesh.GetAllBoneWeights();
-			NativeArray<byte> bpv = theMesh.GetBonesPerVertex();
-			Debug.Log("Mesh has " + bpv.Length + " bones per vertex and " + weights.Length + " weights.");
-        }
-
-		public static SlotDataAsset CreateSlotData(string slotFolder, string assetFolder, string assetName, SkinnedMeshRenderer slotMesh, UMAMaterial material, SkinnedMeshRenderer seamsMesh, string rootBone, bool binarySerialization = false)
+		public static SlotDataAsset CreateSlotData(string slotFolder, string assetFolder, string assetName, string slotName, bool nameByMaterial, SkinnedMeshRenderer slotMesh, UMAMaterial material, SkinnedMeshRenderer seamsMesh, List<string> KeepList, string rootBone, bool binarySerialization = false)
 		{
 			if (!System.IO.Directory.Exists(slotFolder + '/' + assetFolder))
 			{
@@ -148,29 +142,45 @@ namespace UMA.Editors
 				if (skinnedMesh.name == slotMesh.name)
 				{
 					resultingSkinnedMesh = skinnedMesh;
-					CountBoneweights(skinnedMesh.sharedMesh);
+					//CountBoneweights(skinnedMesh.sharedMesh);
 				}
 			}
+
+			Transform[] bones = resultingSkinnedMesh.bones;
+			List<int> KeepBoneIndexes = new List<int>();
+
+			for(int i=0;i<bones.Length;i++)
+            {
+				Transform t = bones[i];
+				foreach(string keep in KeepList)
+                {
+					if (t.name.Contains(keep))
+                    {
+						KeepBoneIndexes.Add(i);
+						break; // only add to keeplist once.
+                    }
+                }
+            }
 
 			Mesh resultingMesh;
 			if (seamsMesh != null)
 			{
 				resultingMesh = SeamRemoval.PerformSeamRemoval(resultingSkinnedMesh, seamsMesh, 0.0001f);
 				resultingSkinnedMesh.sharedMesh = resultingMesh;
-				CountBoneweights(resultingMesh);
+				//CountBoneweights(resultingMesh);
 				SkinnedMeshAligner.AlignBindPose(seamsMesh, resultingSkinnedMesh);
 			}
 			else
 			{
 				resultingMesh = (Mesh)GameObject.Instantiate(resultingSkinnedMesh.sharedMesh);
-				CountBoneweights(resultingMesh);
+				//CountBoneweights(resultingMesh);
 			}
 
-			var usedBonesDictionary = CompileUsedBonesDictionary(resultingMesh);
+			var usedBonesDictionary = CompileUsedBonesDictionary(resultingMesh,KeepBoneIndexes);
 			if (usedBonesDictionary.Count != resultingSkinnedMesh.bones.Length)
 			{
 				resultingMesh = BuildNewReduceBonesMesh(resultingMesh, usedBonesDictionary);
-				CountBoneweights(resultingMesh);
+				//CountBoneweights(resultingMesh);
 			}
 
 			string theMesh = slotFolder + '/' + assetName + '/' + slotMesh.name + ".asset";
@@ -206,7 +216,7 @@ namespace UMA.Editors
 
 			GameObject.DestroyImmediate(tempGameObject);
 			resultingSkinnedMesh = newObject.GetComponentInChildren<SkinnedMeshRenderer>();
-			CountBoneweights(resultingSkinnedMesh.sharedMesh);
+			//CountBoneweights(resultingSkinnedMesh.sharedMesh);
 
 			if (resultingSkinnedMesh)
 			{
@@ -216,7 +226,7 @@ namespace UMA.Editors
 					resultingSkinnedMesh.bones = BuildNewReducedBonesList(resultingSkinnedMesh.bones, usedBonesDictionary);
 				}
 				resultingSkinnedMesh.sharedMesh = resultingMesh;
-				CountBoneweights(resultingMesh);
+				//CountBoneweights(resultingMesh);
 			}
 
 			string SkinnedName = slotFolder + '/' + assetName + '/' + assetName + "_Skinned.prefab";
@@ -232,7 +242,7 @@ namespace UMA.Editors
 			var finalMeshRenderer = meshgo.GetComponent<SkinnedMeshRenderer>();
 
 			var slot = ScriptableObject.CreateInstance<SlotDataAsset>();
-			slot.slotName = assetName;
+			slot.slotName = slotName;
 			//Make sure slots get created with a name hash
 			slot.nameHash = UMAUtils.StringToHash(slot.slotName);
 			slot.material = material;
@@ -242,15 +252,28 @@ namespace UMA.Editors
 			{
 				slot.meshData.RetrieveDataFromUnityCloth(cloth);
 			}
-			AssetDatabase.CreateAsset(slot, slotFolder + '/' + assetName + '/' + assetName + "_Slot.asset");
+			AssetDatabase.CreateAsset(slot, slotFolder + '/' + assetName + '/' + slotName + "_Slot.asset");
 			for(int i = 1; i < slot.meshData.subMeshCount; i++)
 			{
+				string theSlotName = string.Format("{0}_{1}", slotName, i);
+
+				if (i < slotMesh.sharedMaterials.Length && nameByMaterial)
+                {
+					if (!string.IsNullOrEmpty(slotMesh.sharedMaterials[i].name))
+                    {
+						string titlecase = slotMesh.sharedMaterials[i].name.ToTitleCase();
+						if (!string.IsNullOrWhiteSpace(titlecase))
+                        {
+							theSlotName = titlecase; 
+                        }
+					}
+                }
 				var additionalSlot = ScriptableObject.CreateInstance<SlotDataAsset>();
-				additionalSlot.slotName = string.Format("{0}_{1}", assetName, i);
+				additionalSlot.slotName = theSlotName;//  string.Format("{0}_{1}", slotName, i);
 				additionalSlot.material = material;
 				additionalSlot.UpdateMeshData(finalMeshRenderer,rootBone);
 				additionalSlot.subMeshIndex = i;
-				AssetDatabase.CreateAsset(additionalSlot, slotFolder + '/' + assetName + '/' + assetName + "_"+ i +"_Slot.asset");
+				AssetDatabase.CreateAsset(additionalSlot, slotFolder + '/' + assetName + '/' + theSlotName +"_Slot.asset");
 			}
 			AssetDatabase.SaveAssets();
 			AssetDatabase.DeleteAsset(SkinnedName);
@@ -258,12 +281,12 @@ namespace UMA.Editors
 			return slot;
 		}
 
-		public static void OptimizeSlotDataMesh(SkinnedMeshRenderer smr)
+		public static void OptimizeSlotDataMesh(SkinnedMeshRenderer smr, List<int> KeepBonesList)
 		{
 			if (smr == null) return;
 			var mesh = smr.sharedMesh;
 
-			var usedBonesDictionary = CompileUsedBonesDictionary(mesh);
+			var usedBonesDictionary = CompileUsedBonesDictionary(mesh,KeepBonesList);
 			var smrOldBones = smr.bones.Length;
 			if (usedBonesDictionary.Count != smrOldBones)
 			{
@@ -328,12 +351,18 @@ namespace UMA.Editors
 			return res;
 		}
 
-		private static Dictionary<int, int> CompileUsedBonesDictionary(Mesh resultingMesh)
+		private static Dictionary<int, int> CompileUsedBonesDictionary(Mesh resultingMesh, List<int> keepBones)
 		{
 			var usedBones = new Dictionary<int, int>();
 			var boneWeights = resultingMesh.GetAllBoneWeights();
+
+			foreach(int boneIndex in keepBones)
+            {
+				usedBones.Add(boneIndex, usedBones.Count);
+			}
 			for (int i = 0; i < boneWeights.Length; i++)
 			{
+				
 				BoneWeight1 boneWeight = boneWeights[i];
 				if (boneWeight.weight > 0 && !usedBones.ContainsKey(boneWeight.boneIndex))
 				{

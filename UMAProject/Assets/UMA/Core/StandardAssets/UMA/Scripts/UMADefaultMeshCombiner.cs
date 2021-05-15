@@ -147,7 +147,7 @@ namespace UMA
 			newRenderer.sharedMesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
 #endif
 			newRenderer.rootBone = rootBone;
-			newRenderer.quality = SkinQuality.Bone4;
+			newRenderer.quality = SkinQuality.Auto;
 			newRenderer.sharedMesh.name = i == 0 ? "UMAMesh" : ("UMAMesh " + i);
 
 			if(rendererAsset != null)
@@ -179,11 +179,6 @@ namespace UMA
 			{
 				//Move umaMesh creation to with in the renderer loops
 				//May want to make sure to set all it's buffers to null instead of creating a new UMAMeshData
-				UMAMeshData umaMesh = new UMAMeshData();
-				umaMesh.ClaimSharedBuffers();
-
-				umaMesh.subMeshCount = 0;
-				umaMesh.vertexCount = 0;
 
 				combinedMeshList.Clear();
 				combinedMaterialList.Clear();
@@ -199,6 +194,12 @@ namespace UMA
 				}
 				else
 				{
+					UMAMeshData umaMesh = new UMAMeshData();
+					umaMesh.ClaimSharedBuffers();
+
+					umaMesh.subMeshCount = 0;
+					umaMesh.vertexCount = 0;
+
 					SkinnedMeshCombiner.CombineMeshes(umaMesh, combinedMeshList.ToArray(), umaData.blendShapeSettings );
 
 					if (updatedAtlas)
@@ -207,6 +208,7 @@ namespace UMA
 					}
 
 					umaMesh.ApplyDataToUnityMesh(renderers[currentRendererIndex], umaData.skeleton);
+					umaMesh.ReleaseSharedBuffers();
 				}
 				var cloth = renderers[currentRendererIndex].GetComponent<Cloth>();
 				if (clothProperties != null)
@@ -228,7 +230,6 @@ namespace UMA
 					combinedMaterialList[i].skinnedMeshRenderer = renderers[currentRendererIndex];
 				}
 				renderers[currentRendererIndex].sharedMaterials = materials;
-				umaMesh.ReleaseSharedBuffers();
 			}
 
 			umaData.umaRecipe.ClearDNAConverters();
@@ -305,14 +306,13 @@ namespace UMA
 				
 				if (generatedMaterial.umaMaterial.materialType != UMAMaterial.MaterialType.Atlas)
 				{
-					var fragment = generatedMaterial.materialFragments[0];
-					int vertexCount = fragment.slotData.asset.meshData.vertices.Length;
-					idx += vertexCount;
+					foreach (var fragment in generatedMaterial.materialFragments)
+					{
+						int vertexCount = fragment.slotData.asset.meshData.vertices.Length;
+						idx += vertexCount;
+					}
 					continue;
 				}
-
-
-
 
 				for (int materialDefinitionIndex = 0; materialDefinitionIndex < generatedMaterial.materialFragments.Count; materialDefinitionIndex++)
 				{
@@ -333,8 +333,8 @@ namespace UMA
 						if (null != foundRect && foundRect.rect != Rect.zero)
 						{
 							var size = foundRect.rect.size * generatedMaterial.resolutionScale;
-							var offsetX = foundRect.rect.x * generatedMaterial.resolutionScale;
-							var offsetY = foundRect.rect.y * generatedMaterial.resolutionScale;
+							var offsetX = foundRect.rect.x * generatedMaterial.resolutionScale.x;
+							var offsetY = foundRect.rect.y * generatedMaterial.resolutionScale.x;
 
 							atlasXMin += (offsetX / generatedMaterial.cropResolution.x);
 							atlasXRange = size.x / generatedMaterial.cropResolution.x;

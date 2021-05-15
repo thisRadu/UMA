@@ -1,11 +1,45 @@
 using UnityEngine;
 using UnityEditor;
 using System.Collections.Generic;
+using UMA.CharacterSystem;
+using UnityEditorInternal;
 
 namespace UMA.Editors
 {
 	public class UmaSlotBuilderWindow : EditorWindow 
 	{
+		/// <summary>
+		/// This class is pretty dumb. It exists solely because "string" has no default constructor, so can't be created using reflection.
+		/// </summary>
+		public class BoneName : Object
+		{
+			public string strValue;
+			public static implicit operator BoneName(string value)
+			{
+				return new BoneName(value);
+			}
+
+			public static BoneName operator +(BoneName first, BoneName second)
+			{
+				return new BoneName(first.strValue + second.strValue);
+			}
+
+			public BoneName()
+            {
+				strValue = "";
+            }
+
+            public override string ToString()
+            {
+                return strValue;
+            }
+
+            public BoneName(string val)
+            {
+				strValue = val;
+            }
+		}
+
 		public string slotName;
 		public string RootBone = "Global";
 		public UnityEngine.Object slotFolder;
@@ -21,6 +55,10 @@ namespace UMA.Editors
 		public string errmsg = "";
 		public List<string> Tags = new List<string>();
 		public bool showTags;
+		public bool nameAfterMaterial=true;
+		public List<BoneName> KeepBones = new List<BoneName>();
+		private ReorderableList boneList;
+		private bool boneListInitialized;
 
 		string GetAssetFolder()
 		{
@@ -34,6 +72,20 @@ namespace UMA.Editors
 
 		string GetAssetName()
 		{
+			int index = slotName.LastIndexOf('/');
+			if (index > 0)
+			{
+				return slotName.Substring(index + 1);
+			}
+			return slotName;
+		}
+
+		string GetSlotName(SkinnedMeshRenderer smr)
+		{
+			if (nameAfterMaterial)
+			{
+				return smr.sharedMaterial.name.ToTitleCase();
+			}
 			int index = slotName.LastIndexOf('/');
 			if (index > 0)
 			{
@@ -59,8 +111,25 @@ namespace UMA.Editors
 			}
 		}
 
+		private void InitBoneList()
+		{
+			boneList = new ReorderableList(KeepBones,typeof(BoneName), true, true, true, true);
+			boneList.drawHeaderCallback = (Rect rect) => {
+				EditorGUI.LabelField(rect, "Keep Bones Containing");
+			};
+			boneList.drawElementCallback = (Rect rect, int index, bool isActive, bool isFocused) => {
+				rect.y += 2;
+				KeepBones[index].strValue = EditorGUI.TextField(new Rect(rect.x + 10, rect.y, rect.width - 10, EditorGUIUtility.singleLineHeight), KeepBones[index].strValue);
+			};
+			boneListInitialized = true;
+		}
+
 		void OnGUI()
         {
+			if (!boneListInitialized || boneList == null)
+			{
+				InitBoneList();
+			}
 			GUIHelper.BeginVerticalPadded(10, new Color(0.75f, 0.85f, 1f), EditorStyles.helpBox);
 			GUILayout.Label("Common Parameters", EditorStyles.boldLabel);
 			normalReferenceMesh = EditorGUILayout.ObjectField("Seams Mesh (Optional)  ", normalReferenceMesh, typeof(SkinnedMeshRenderer), false) as SkinnedMeshRenderer;
@@ -82,6 +151,7 @@ namespace UMA.Editors
 			binarySerialization = EditorGUILayout.Toggle(new GUIContent("Binary Serialization", "Forces the created Mesh object to be serialized as binary. Recommended for large meshes and blendshapes."), binarySerialization);
 			addToGlobalLibrary = EditorGUILayout.Toggle("Add To Global Library", addToGlobalLibrary);
 			EditorGUILayout.EndHorizontal();
+			boneList.DoLayoutList();
 			GUIHelper.EndVerticalPadded(10);
 			DoDragDrop();
 
@@ -232,6 +302,7 @@ namespace UMA.Editors
 			GUIHelper.BeginVerticalPadded(10, new Color(0.75f, 0.85f, 1f), EditorStyles.helpBox);
 			GUILayout.Label("Automatic Drag and Drop processing", EditorStyles.boldLabel);
 			Rect dropArea = GUILayoutUtility.GetRect(0.0f, 50.0f, GUILayout.ExpandWidth(true));
+			nameAfterMaterial = GUILayout.Toggle(nameAfterMaterial, "Name slot by material");
 			Color save = GUI.color;
 			GUI.color = Color.white;
             GUI.Box(dropArea, "Drag FBX GameObject or meshes here to generate all slots and overlays for the GameObject");
@@ -301,8 +372,13 @@ namespace UMA.Editors
 				return null;
 			}
 
-			Debug.Log("Slot Mesh: " + slotMesh.name, slotMesh.gameObject);
-			SlotDataAsset slot = UMASlotProcessingUtil.CreateSlotData(AssetDatabase.GetAssetPath(slotFolder), GetAssetFolder(), GetAssetName(), slotMesh, material, normalReferenceMesh,RootBone, binarySerialization);
+			List<string> KeepList = new List<string>();
+			foreach(BoneName b in KeepBones)
+            {
+				KeepList.Add(b.strValue);
+            }
+
+			SlotDataAsset slot = UMASlotProcessingUtil.CreateSlotData(AssetDatabase.GetAssetPath(slotFolder), GetAssetFolder(), GetAssetName(),GetSlotName(slotMesh),nameAfterMaterial, slotMesh, material, normalReferenceMesh,KeepList, RootBone, binarySerialization);
 			slot.tags = Tags.ToArray();
 			return slot;
 		}
@@ -361,7 +437,12 @@ namespace UMA.Editors
 			}
 		}
 
-		private void RecurseObject(Object obj, HashSet<SkinnedMeshRenderer> meshes)
+        private string AsciiName(string name)
+        {
+			return name.ToTitleCase();
+        }
+
+        private void RecurseObject(Object obj, HashSet<SkinnedMeshRenderer> meshes)
 		{
 			GameObject go = obj as GameObject;
 			if (go != null)

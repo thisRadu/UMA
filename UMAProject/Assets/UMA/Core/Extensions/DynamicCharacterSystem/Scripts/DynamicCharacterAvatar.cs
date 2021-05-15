@@ -93,8 +93,6 @@ namespace UMA.CharacterSystem
         //but for it to still not be shown immediately or you may want to hide it anyway
         [Tooltip("If checked will turn off the SkinnedMeshRenderer after the character has been created to hide it. If not checked will turn it on again.")]
         public bool hide = false;
-        [NonSerialized]
-        public bool lastHide;
 
         [Tooltip("If true, then the meshcombiner will merge blendshapes found on slots that are part of this umaData")]
         public bool loadBlendShapes = false;
@@ -117,6 +115,8 @@ namespace UMA.CharacterSystem
         public bool cacheCurrentState = true;
         [Tooltip("If true the existing skeleton is cleared and then rebuilt when the race is changed. Turn this off if you experience animation issues.")]
         public bool rebuildSkeleton = false;
+        [Tooltip("Always rebuild the skeleton. This will clear out additional animated bones from slots.")]
+        public bool alwaysRebuildSkeleton = false;
 
         //the dictionary of active recipes this character is using to create itself
         private Dictionary<string, UMATextRecipe> _wardrobeRecipes = new Dictionary<string, UMATextRecipe>();
@@ -144,8 +144,10 @@ namespace UMA.CharacterSystem
         public string loadString;
         public bool loadFileOnStart;
 
+        [Tooltip("This will make the slot use the UMAMaterial of the first overlay")]
+        public bool ForceSlotMaterials;
+
 #if UMA_ADDRESSABLES
-        private bool isCaching = false;
 		private bool isAddressableSystem;
         private Queue<AsyncOp> LoadedHandles = new Queue<AsyncOp>();
 #endif
@@ -168,8 +170,6 @@ namespace UMA.CharacterSystem
         public SaveOptions defaultSaveOptions = SaveOptions.saveDNA | SaveOptions.saveWardrobe | SaveOptions.saveColors | SaveOptions.saveAnimator;
         //
         public Vector3 BoundsOffset;
-        //
-        [HideInInspector]
 
 
 #if UNITY_EDITOR
@@ -394,6 +394,7 @@ namespace UMA.CharacterSystem
                     ud.umaRoot = null;
                 }
             }
+
 #else
            UMAData ud = GetComponent<UMAData>();
 
@@ -405,8 +406,8 @@ namespace UMA.CharacterSystem
                {
                    DestroyImmediate(go);
                }
+               ud.umaRoot = null;
            }
-           ud.umaRoot = null;
 #endif
 
 #if UMA_ADDRESSABLES
@@ -415,29 +416,47 @@ namespace UMA.CharacterSystem
             if (UMAContext.FindInstance() is UMAGlobalContext)
             {
                 isAddressableSystem = true;
-                UMAGeneratorGLib glib = UMAContext.Instance.GetComponentInChildren<UMAGeneratorGLib>();
-                if (glib != null)
-                {
-                    isCaching = glib.EnableCacheCleanup;
-                }
             }
 #endif
-#if UNITY_EDITOR
-            EditorUMAContextBase = GameObject.Find("UMAEditorContext");
-            if (EditorUMAContextBase != null)
-            {
-                EditorUMAContextBase.hideFlags = HideFlags.DontSave | HideFlags.NotEditable;
-                EditorApplication.update -= CheckEditorContextNeeded;
-                EditorApplication.update += CheckEditorContextNeeded;
-            }
-#endif
+
+            cacheStates = new Dictionary<string, string>();
             this.context = UMAContextBase.Instance;
         }
+
+#if UNITY_EDITOR
+        [UnityEditor.Callbacks.DidReloadScripts]
+        private static void OnScriptsReloaded()
+        {
+            if (!EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                DynamicCharacterAvatar[] dcas = GameObject.FindObjectsOfType<DynamicCharacterAvatar>();
+                foreach (var dca in dcas)
+                {
+                    if (dca.editorTimeGeneration)
+                    {
+                        dca.GenerateSingleUMA();
+                    }
+                }
+            }
+        }
+#endif
         // Use this for initialization
         public override void Start()
         {
-            lastHide = !hide;
+#if UNITY_EDITOR
+            if (UMAContextBase.Instance == null)
+            {
+                CreateEditorContext();
+            }
+#endif
 
+            if (umaGenerator == null)
+            {
+                if (UMAContextBase.Instance != null)
+                {
+                    umaGenerator = UMAContextBase.Instance.GetComponent<UMAGeneratorBase>();
+                }
+            }
 #if SUPER_LOGGING
 			Debug.Log("Start on DynamicCharacterAvatar: " + gameObject.name);
 #endif
@@ -501,16 +520,36 @@ namespace UMA.CharacterSystem
             return objs;
         }
 
+        public void InitializeFromPreset(UMAPreset preset)
+        {
+            preloadWardrobeRecipes = preset.DefaultWardrobe;
+            predefinedDNA = preset.PredefinedDNA;
+            characterColors = preset.DefaultColors;
+        }
+
+        public void InitializeFromPreset(string presetstring)
+        {
+            UMAPreset prs = JsonUtility.FromJson<UMAPreset>(presetstring);
+            InitializeFromPreset(prs);
+        }
+
 #if UNITY_EDITOR
         public void GenerateSingleUMA()
         {
-            UMAGenerator ugb = UMAContext.Instance.gameObject.GetComponentInChildren<UMAGenerator>();
+            UMAGenerator ugb = umaGenerator as UMAGenerator; 
+            if (umaGenerator == null)
+            {
+                if (UMAContext.Instance == null)
+                    return;
+               ugb = UMAContext.Instance.gameObject.GetComponentInChildren<UMAGenerator>();
+            }
             if (ugb != null)
             {
                 if (UnityEditor.PrefabUtility.IsPartOfPrefabInstance(gameObject.transform))
                 {
                     // Unfortunately we must unpack the prefab or it will blow up.
-                    UnityEditor.PrefabUtility.UnpackPrefabInstance(gameObject, UnityEditor.PrefabUnpackMode.Completely, UnityEditor.InteractionMode.AutomatedAction);
+                    GameObject go = PrefabUtility.GetOutermostPrefabInstanceRoot(this.gameObject);
+                    UnityEditor.PrefabUtility.UnpackPrefabInstance(go, UnityEditor.PrefabUnpackMode.Completely, UnityEditor.InteractionMode.AutomatedAction);
                 }
                 CleanupGeneratedData();
                 activeRace.SetRaceData();
@@ -532,7 +571,7 @@ namespace UMA.CharacterSystem
                 ugb.InitialScaleFactor = ugb.editorInitialScaleFactor;
                 ugb.atlasResolution = ugb.editorAtlasResolution;
 
-                ugb.GenerateSingleUMA(umaData);
+                ugb.GenerateSingleUMA(umaData,false); // don't fire completed events in the editor
 
                 ugb.fastGeneration = oldFastGen;
                 ugb.FreezeTime = false;
@@ -545,7 +584,7 @@ namespace UMA.CharacterSystem
         private void CleanupGeneratedData()
         {
             List<GameObject> Cleaners = GetRenderers(gameObject);
-            Hide();
+            Hide(false);
             foreach (GameObject go in Cleaners)
             {
                 DestroyImmediate(go);
@@ -561,16 +600,32 @@ namespace UMA.CharacterSystem
         {
             if (umaData != null)
             {
+#if UNITY_EDITOR
+                if (editorTimeGeneration && Application.isPlaying == false)
+                {
+                    var r = umaData.GetRenderers();
+                    if (r != null)
+                    {
+                        if (r.Length > 0 && r[0].sharedMesh == null)
+                            GenerateSingleUMA();
+                    }
+                }
+#endif
                 umaData.blendShapeSettings.ignoreBlendShapes = !loadBlendShapes;
 
-                if (umaData.rendererCount > 0 && lastHide != hide)
+                if (umaData.rendererCount > 0)
                 {
-                    lastHide = hide;
-                    foreach(SkinnedMeshRenderer smr in umaData.GetRenderers())
+                    var renderers = umaData.GetRenderers();
+
+                    if ((renderers[0].enabled && hide) || 
+                        (renderers[0].enabled == false && hide == false))
                     {
-                        if (smr != null && smr.enabled == hide)
+                        for (int i = 0; i < renderers.Length; i++)
                         {
-                            smr.enabled = !hide;
+                            if (renderers[i] && renderers[i].enabled == hide)
+                            {
+                                renderers[i].enabled = !hide;
+                            }
                         }
                     }
                 }
@@ -579,6 +634,7 @@ namespace UMA.CharacterSystem
 
         void OnDisable()
         {
+
 #if UNITY_EDITOR
             DestroyEditorUMAContextBase();
 #endif
@@ -586,6 +642,7 @@ namespace UMA.CharacterSystem
 
         void OnDestroy()
         {
+
 #if UNITY_EDITOR
             DestroyEditorUMAContextBase();
 #endif
@@ -681,7 +738,8 @@ namespace UMA.CharacterSystem
 
         void BuildFromComponentSettings()
         {
-            SetActiveRace();
+            if (!SetActiveRace())
+                return;
             if (WardrobeRecipes.Count == 0)
                 LoadDefaultWardrobe();
             SetExpressionSet();
@@ -944,54 +1002,67 @@ namespace UMA.CharacterSystem
         /// <summary>
         /// Sets the starting race of the avatar based on the value of the 'activeRace'. 
         /// </summary>
-        void SetActiveRace()
+        bool SetActiveRace()
         {
-                if (activeRace.name == "" || activeRace.name == "None Set")
+            if (activeRace.name == "" || activeRace.name == "None Set")
+            {
+                activeRace.data = null;
+                if (Debug.isDebugBuild)
+                    Debug.LogWarning("No activeRace set. Aborting build");
+                return false;
+            }
+            //ImportSettingsCO might have changed the activeRace.name so we may still need to change the actual racedata if activeRace.racedata.raceName is different
+            if (activeRace.data != null && activeRace.name == activeRace.racedata.raceName)
+            {
+                activeRace.name = activeRace.racedata.raceName;
+                umaRecipe = activeRace.racedata.baseRaceRecipe;
+            }
+            //otherwise...
+            else if (activeRace.name != "")
+            {
+                activeRace.data = context.GetRace(activeRace.name);
+                if (activeRace.racedata != null)
                 {
-                    activeRace.data = null;
-                    if (Debug.isDebugBuild)
-                        Debug.LogWarning("No activeRace set. Aborting build");
-                    return;
-                }
-                //ImportSettingsCO might have changed the activeRace.name so we may still need to change the actual racedata if activeRace.racedata.raceName is different
-                if (activeRace.data != null && activeRace.name == activeRace.racedata.raceName)
-                {
-                    activeRace.name = activeRace.racedata.raceName;
                     umaRecipe = activeRace.racedata.baseRaceRecipe;
                 }
-                //otherwise...
-                else if (activeRace.name != "")
-                {
-                    activeRace.data = context.GetRace(activeRace.name);
-                    if (activeRace.racedata != null)
-                    {
-                        umaRecipe = activeRace.racedata.baseRaceRecipe;
-                    }
-                }
-                //if we are loading an old UMARecipe from the recipe field and the old race is not in resources the race will be null but the recipe wont be 
-                if (umaRecipe == null)
-                {
-                    if (Debug.isDebugBuild)
-                        Debug.LogWarning("[SetActiveRace] could not find baseRaceRecipe for the race " + activeRace.name + ". Have you set one in the raceData?");
             }
+            //if we are loading an old UMARecipe from the recipe field and the old race is not in resources the race will be null but the recipe wont be 
+            if (umaRecipe == null)
+            {
+                if (Debug.isDebugBuild)
+                    Debug.LogWarning("[SetActiveRace] could not find baseRaceRecipe for the race " + activeRace.name + ". Have you set one in the raceData?");
+                return false; 
+            }
+            return true;
         }
+
+        public void ChangeRace(string racename, bool force)
+        {
+            ChangeRace(racename, ChangeRaceOptions.useDefaults, force);
+        }
+
         /// <summary>
         /// Change the race of the Avatar, optionally overriding the 'onChangeRace' settings in the avatar component itself
         /// </summary>
         /// <param name="racename">race to change to</param>
         /// <param name="customChangeRaceOptions">flags for the race change options</param>
-        public void ChangeRace(string racename, ChangeRaceOptions customChangeRaceOptions = ChangeRaceOptions.useDefaults,bool ForceChange = false)
+        public bool ChangeRace(string racename, ChangeRaceOptions customChangeRaceOptions = ChangeRaceOptions.useDefaults,bool ForceChange = false)
         {
             // never been built, just use the race preset.
-            if (activeRace.racedata == null)
+            if (activeRace.racedata == null && ForceChange == false)
             {
                 RacePreset = racename;
-                return;
+                return true;
+            }
+            if (UpdatePending())
+            {
+                return false;
             }
             RaceData thisRace = null;
             if (racename != "None Set")
                 thisRace = context.GetRace(racename);
             ChangeRace(thisRace, customChangeRaceOptions, ForceChange);
+            return true;
         }
 
         public void ChangeRaceData(string raceName)
@@ -1577,11 +1648,7 @@ namespace UMA.CharacterSystem
             var thisContext = UMAContextBase.Instance;
             if (thisContext == null)
             {
-#if UNITY_EDITOR
-                thisContext = CreateEditorContext();
-#else
                 return;
-#endif
             }
             //var thisDCS = thisContext.dynamicCharacterSystem as DynamicCharacterSystem;
             Dictionary<string, UMATextRecipe> wrBU = new Dictionary<string, UMATextRecipe>(_wardrobeRecipes);
@@ -2233,8 +2300,12 @@ namespace UMA.CharacterSystem
         /// </summary>
         public void SetAnimatorController(bool addAnimator = false)
         {
+            // Somehow we can get here while Unity Addressables is instantiating an object, before it is constructed.
+            if (this == null)
+                return;
             if (KeepAnimatorController == true && animationController != null)
                 return;
+            if (activeRace == null) return;
 
             RuntimeAnimatorController controllerToUse = raceAnimationControllers.GetAnimatorForRace(activeRace.name);
 
@@ -2272,7 +2343,6 @@ namespace UMA.CharacterSystem
             {
                 if (thisAnimator != null)
                 {
-                    Debug.LogWarning("Nulling out runtimeanimator Controller");
                     thisAnimator.runtimeAnimatorController = null;
                 }
             }
@@ -2999,7 +3069,7 @@ namespace UMA.CharacterSystem
         /// </summary>
         /// <returns>Can also be used to return an array of additional slots if this avatars flagForReload field is set to true before calling</returns>
         /// <param name="RestoreDNA">If updating the same race set this to true to restore the current DNA.</param>
-        public void BuildCharacter(bool RestoreDNA = true, bool skipBundleCheck = false)
+        public void BuildCharacter(bool RestoreDNA = true, bool skipBundleCheck = false, bool useBundleParameter = true)
         {
 #if SUPER_LOGGING
 			Debug.Log("Building DynamicCharacterAvatar: " + gameObject.name);
@@ -3160,7 +3230,23 @@ namespace UMA.CharacterSystem
                     }
                 }
             }
-            LoadCharacter(umaRecipe, ReplaceRecipes, Recipes, umaAdditionalRecipes, MeshHideDictionary, HiddenSlots, HideTags, CurrentDNA, RestoreDNA, !BundleCheck);
+
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                skipBundleCheck = true;
+            }
+            else
+            {
+                if (useBundleParameter)
+                    skipBundleCheck = !BundleCheck; 
+            }
+
+#else
+                if (useBundleParameter)
+                    skipBundleCheck = !BundleCheck;
+#endif
+            LoadCharacter(umaRecipe, ReplaceRecipes, Recipes, umaAdditionalRecipes, MeshHideDictionary, HiddenSlots, HideTags, CurrentDNA, RestoreDNA, skipBundleCheck);
         }
 
 #if UMA_ADDRESSABLES
@@ -3376,6 +3462,7 @@ namespace UMA.CharacterSystem
                             SortedOverlays.Add(od);
                         }
                     }
+                    sd.altMaterial = SortedOverlays[0].asset.material;
                     sd.UpdateOverlayList(SortedOverlays);
                 }
             }
@@ -3386,27 +3473,34 @@ namespace UMA.CharacterSystem
 
             if (umaRace != umaData.umaRecipe.raceData)
             {
-                if (rebuildSkeleton)
+              /*if (rebuildSkeleton)
                 {
-                    // New Way
+                    
+                    // Old New Way
                     DestroyImmediate(umaData.umaRoot,false);
                     umaData.umaRoot = null;
                     // New Way end
 
                     // Old Way
-                    /*
-                    foreach (Transform child in gameObject.transform)
-                    {
-                        UMAUtils.DestroySceneObject(child.gameObject);
-                    }*/
+                    //
+                    //foreach (Transform child in gameObject.transform)
+                    //{
+                    //    UMAUtils.DestroySceneObject(child.gameObject);
+                    //}
                     // Old way end
-                }
+                } */
+                // new way
+                umaData.RebuildSkeleton = rebuildSkeleton;
                 UpdateNewRace();
             }
             else
             {
+                umaData.RebuildSkeleton = false;
                 UpdateSameRace();
             }
+
+            if (alwaysRebuildSkeleton)
+                umaData.RebuildSkeleton = true;
 
             ApplyPredefinedDNA();
 			umaData.KeepAvatar = keepAvatar;
@@ -3699,6 +3793,8 @@ namespace UMA.CharacterSystem
         /// <param name="cacheStateName"></param>
         void AddCharacterStateCache(string cacheStateName = "")
         {
+            if (!Application.isPlaying)
+                return;
             if (cacheStateName == "NULL")//we are caching the state before the Avatar is loaded- which is basically just the colors
             {
                 var thisModel = new UMATextRecipe.DCSPackRecipe();
@@ -3746,9 +3842,20 @@ namespace UMA.CharacterSystem
         /// </summary>
         public UMAContextBase CreateEditorContext()
         {
-            EditorUMAContextBase = UMAContextBase.CreateEditorContext();
+            EditorUMAContextBase = GameObject.Find("UMAEditorContext");
+            if (EditorUMAContextBase == null)
+            {
+                var glib = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/UMA/Getting Started/UMA_GLIB.prefab");
+                if (glib != null)
+                {
+                    glib.name = "UMAEditorContext";
+                    EditorUMAContextBase = (GameObject)PrefabUtility.InstantiatePrefab(glib);
+                }
+                EditorUMAContextBase.hideFlags = HideFlags.DontSave | HideFlags.NotEditable;
+            }
             EditorApplication.update -= CheckEditorContextNeeded;
             EditorApplication.update += CheckEditorContextNeeded;
+            UMAContextBase.Instance = EditorUMAContextBase.GetComponent<UMAContextBase>();
             return UMAContextBase.Instance;
         }
 
@@ -3762,8 +3869,6 @@ namespace UMA.CharacterSystem
                 }
                 DestroyImmediate(EditorUMAContextBase);
                 EditorApplication.update -= CheckEditorContextNeeded;
-                if (Debug.isDebugBuild)
-                    Debug.Log("UMAEditorContext was removed");
             }
         }
 
@@ -3865,6 +3970,10 @@ namespace UMA.CharacterSystem
         {
             if (umaData != null)
             {
+                if (umaData == null)
+                    return false;
+                if (umaData.umaGenerator == null)
+                    return false;
                 return umaData.umaGenerator.updatePending(umaData);
             }
             return false;
@@ -4268,11 +4377,11 @@ namespace UMA.CharacterSystem
                 List<ColorValue> newColors = new List<ColorValue>();
 
                 foreach (ColorValue cv in Colors)
-                {
+                { 
                     if (cv.Name != name)
                         newColors.Add(cv);
                 }
-
+                 
                 Colors = newColors;
             }
         }

@@ -103,6 +103,9 @@ namespace UMA
 		[NonSerialized]
 		public bool firstBake;
 
+		[NonSerialized]
+		public bool RebuildSkeleton;
+
 		public UMAGeneratorBase umaGenerator;
 
 		[NonSerialized]
@@ -220,6 +223,7 @@ namespace UMA
 		public UMADataEvent CharacterBegun;
 		public UMADataEvent AnimatorStateSaved;
 		public UMADataEvent AnimatorStateRestored;
+		public UMADataEvent PreUpdateUMABody;
 
 		public GameObject umaRoot;
 
@@ -446,7 +450,7 @@ namespace UMA
 			public List<MaterialFragment> materialFragments = new List<MaterialFragment>();
 			public Texture[] resultingAtlasList;
 			public Vector2 cropResolution;
-			public float resolutionScale;
+			public Vector2 resolutionScale;
 			public string[] textureNameList;
 			public UMARendererAsset rendererAsset;
 			public SkinnedMeshRenderer skinnedMeshRenderer;
@@ -468,6 +472,7 @@ namespace UMA
 			public OverlayData[] overlayData;
 			public Rect atlasRegion;
 			public bool isRectShared;
+			public bool isNoTextures;
 			public List<OverlayData> overlayList;
 			public MaterialFragment rectFragment;
 			public textureData baseOverlay;
@@ -475,14 +480,19 @@ namespace UMA
 			public Color GetMultiplier(int overlay, int textureType)
 			{
 				var c = Color.white;
+				if (overlay >= overlayData.Length) 
+					return c;
 
 				if (channelMask[overlay] != null && channelMask[overlay].Length > 0)
 				{
-					c = channelMask[overlay][textureType];
-					c.r = Mathf.Clamp((c.r + overlayData[overlay].GetComponentAdjustmentsForChannel(c.r, textureType, 0)), 0, 1);
-					c.g = Mathf.Clamp((c.g + overlayData[overlay].GetComponentAdjustmentsForChannel(c.g, textureType, 1)), 0, 1);
-					c.b = Mathf.Clamp((c.b + overlayData[overlay].GetComponentAdjustmentsForChannel(c.b, textureType, 2)), 0, 1);
-					c.a = Mathf.Clamp((c.a + overlayData[overlay].GetComponentAdjustmentsForChannel(c.a, textureType, 3)), 0, 1);
+					if (textureType < channelMask[overlay].Length)
+					{
+						c = channelMask[overlay][textureType];
+						c.r = Mathf.Clamp((c.r + overlayData[overlay].GetComponentAdjustmentsForChannel(c.r, textureType, 0)), 0, 1);
+						c.g = Mathf.Clamp((c.g + overlayData[overlay].GetComponentAdjustmentsForChannel(c.g, textureType, 1)), 0, 1);
+						c.b = Mathf.Clamp((c.b + overlayData[overlay].GetComponentAdjustmentsForChannel(c.b, textureType, 2)), 0, 1);
+						c.a = Mathf.Clamp((c.a + overlayData[overlay].GetComponentAdjustmentsForChannel(c.a, textureType, 3)), 0, 1);
+					}
 					return c;
 				}
 				else
@@ -517,20 +527,19 @@ namespace UMA
 			}
 			public Color32 GetAdditive(int overlay, int textureType)
 			{
-				if (channelAdditiveMask[overlay] != null && channelAdditiveMask[overlay].Length > 0)
+				if (channelAdditiveMask[overlay] != null && channelAdditiveMask[overlay].Length > 0 && channelAdditiveMask.Length >= overlay)
 				{
-					var c = channelAdditiveMask[overlay][textureType];
-					c.r = Mathf.Clamp((c.r + overlayData[overlay].GetComponentAdjustmentsForChannel(c.r, textureType, 0, true)), 0, 1);
-					c.g = Mathf.Clamp((c.g + overlayData[overlay].GetComponentAdjustmentsForChannel(c.g, textureType, 1, true)), 0, 1);
-					c.b = Mathf.Clamp((c.b + overlayData[overlay].GetComponentAdjustmentsForChannel(c.b, textureType, 2, true)), 0, 1);
-					c.a = Mathf.Clamp((c.a + overlayData[overlay].GetComponentAdjustmentsForChannel(c.a, textureType, 3, true)), 0, 1);
-					//return channelAdditiveMask[overlay][textureType];
-					return c;
+					if (textureType < channelAdditiveMask[overlay].Length)
+					{
+						var c = channelAdditiveMask[overlay][textureType];
+						c.r = Mathf.Clamp((c.r + overlayData[overlay].GetComponentAdjustmentsForChannel(c.r, textureType, 0, true)), 0, 1);
+						c.g = Mathf.Clamp((c.g + overlayData[overlay].GetComponentAdjustmentsForChannel(c.g, textureType, 1, true)), 0, 1);
+						c.b = Mathf.Clamp((c.b + overlayData[overlay].GetComponentAdjustmentsForChannel(c.b, textureType, 2, true)), 0, 1);
+						c.a = Mathf.Clamp((c.a + overlayData[overlay].GetComponentAdjustmentsForChannel(c.a, textureType, 3, true)), 0, 1);
+						return c;
+					}
 				}
-				else
-				{
-					return new Color32(0, 0, 0, 0);
-				}
+				return new Color32(0, 0, 0, 0);
 			}
 		}
 
@@ -1091,6 +1100,7 @@ namespace UMA
 				}
 			}
 
+
 			/// <summary>
 			/// Applies each DNA converter to the UMA data and skeleton.
 			/// </summary>
@@ -1359,6 +1369,19 @@ namespace UMA
 		/// Fire the Animator State Saved event.
 		/// This happens before the Animator State is saved.
 		/// </summary>
+		public void FirePreUpdateUMABody()
+		{
+			if (PreUpdateUMABody != null)
+			{
+				PreUpdateUMABody.Invoke(this);
+			}
+		}
+
+
+		/// <summary>
+		/// Fire the Animator State Saved event.
+		/// This happens before the Animator State is saved.
+		/// </summary>
 		public void FireAnimatorStateSavedEvent()
 		{
 			if (AnimatorStateSaved != null)
@@ -1488,10 +1511,6 @@ namespace UMA
 							if (tempTexture is RenderTexture)
 							{
 								RenderTexture tempRenderTexture = tempTexture as RenderTexture;
-								if (RenderTexture.active == tempRenderTexture)
-                                {
-									Debug.Log("RenderTexture is ACTIVE!!!! Name = " + tempRenderTexture.name);
-                                }
 								tempRenderTexture.Release();
 								UMAUtils.DestroySceneObject(tempRenderTexture);
 							}
@@ -1527,6 +1546,12 @@ namespace UMA
 				}
 				if (destroyRenderer)
 				{
+					// need to kill cloth first if it exists.
+					var cloth = renderer.gameObject.GetComponent<Cloth>();
+					if (cloth != null)
+                    {
+						UMAUtils.DestroySceneObject(cloth);
+					}
 					UMAUtils.DestroySceneObject(renderer.sharedMesh);
 					UMAUtils.DestroySceneObject(renderer);
 				}
@@ -1866,14 +1891,6 @@ namespace UMA
 		/// <param name="allowRebuild">Triggers a rebuild of the uma character if the blendshape is baked</param>
 		public void SetBlendShape(string name, float weight, bool allowRebuild = false)
 		{
-#if !UNITY_2018_3_OR_NEWER
-			if (weight < 0.0f || weight > 1.0f)
-			{
-				if (Debug.isDebugBuild)
-					Debug.LogWarning("SetBlendShape: Weight is out of range, clamping...");
-			}
-			weight = Mathf.Clamp01(weight);
-#endif
 			BlendShapeData data;
 			if (blendShapeSettings.blendShapes.TryGetValue(name, out data))
 			{

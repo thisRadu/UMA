@@ -245,14 +245,12 @@ namespace UMA
                 CachedOp c = LoadedItems[i]; 
                 if (c.Expired)
                 {
-                    Debug.Log("Cleaning up: " + c.Info);
                     Addressables.Release(c.Operation);
                     Cleanup.Add(c); 
                 }
             }
             if (Cleanup.Count > 0)
             {
-                Debug.Log("Freeing " + Cleanup.Count + " Items");
                 LoadedItems.RemoveAll(x => Cleanup.Contains(x));
             }
         }
@@ -534,11 +532,20 @@ namespace UMA
 
 			foreach (var slot in Slots)
 			{
+                // We are getting extra blank slots. That's weird. 
+
+                if (string.IsNullOrWhiteSpace(slot.id)) continue;
+
 				AssetItem s = GetAssetItem<SlotDataAsset>(slot.id);
 				if (s != null)
 				{
                     returnval.Add(s);
                     string LodIndicator = slot.id.Trim() + "_LOD";
+                    if (slot.id.Contains("_LOD"))
+                    {
+                        // LOD is directly in the base recipe. 
+                        LodIndicator = slot.id.Substring(0, slot.id.Length-1);
+                    }
 
                     if (slot.overlays != null)
                     {
@@ -875,10 +882,27 @@ namespace UMA
             }
         }
 
-		/// <summary>
-		/// Checks if the given asset path resides in one of the given folder paths. Returns true if foldersToSearch is null or empty and no check is required
-		/// </summary>
-		private bool AssetFolderCheck(AssetItem itemToCheck, string[] foldersToSearch = null)
+        /// <summary>
+        /// Load all items from the asset bundle into the index.
+        /// </summary>
+        /// <param name="ab"></param>
+        public void UnloadBundle(AssetBundle ab)
+        {
+            foreach (Type t in Types)
+            {
+                var objs = ab.LoadAllAssets(t);
+
+                foreach (UnityEngine.Object o in objs)
+                {
+                    RemoveItem(o);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Checks if the given asset path resides in one of the given folder paths. Returns true if foldersToSearch is null or empty and no check is required
+        /// </summary>
+        private bool AssetFolderCheck(AssetItem itemToCheck, string[] foldersToSearch = null)
         {
             if (foldersToSearch == null)
                 return true;
@@ -1045,46 +1069,78 @@ namespace UMA
 
 			return LoadLabelList(Keys,keepLoaded);
 		}
+#if UNITY_EDITOR
+        async void ValidateSingleKey(string s) 
+        {
+            var result = await Addressables.LoadResourceLocationsAsync(s).Task;
 
-		public AsyncOperationHandle<IList<UnityEngine.Object>> LoadLabelList(List<string> Keys, bool keepLoaded)
-		{
+            string info = "Label "+s+" has "+result.Count + " Resource Locations.";
+
+            Debug.Log(info);
+        }
+#endif
+
+        static List<UnityEngine.Object> ProcessedItems = new List<UnityEngine.Object>();
+
+        public AsyncOperationHandle<IList<UnityEngine.Object>> LoadLabelList(List<string> Keys, bool keepLoaded)
+        {
 #if SUPER_LOGGING
             string labels = "";
 #endif
             foreach (string label in Keys)
-			{
-				if (!Preloads.ContainsKey(label))
-				{
-					Preloads[label] = keepLoaded;
-				}
-				else
-				{
-					if (keepLoaded) // only overwrite if keepLoaded = true. All "keepLoaded" take precedence.
-						Preloads[label] = keepLoaded;
-				}
+            {
+                if (!Preloads.ContainsKey(label))
+                {
+                    Preloads[label] = keepLoaded;
+                }
+                else
+                {
+                    if (keepLoaded) // only overwrite if keepLoaded = true. All "keepLoaded" take precedence.
+                        Preloads[label] = keepLoaded;
+                }
 #if SUPER_LOGGING
                 labels += "'" + label + "';";
 #endif
-			}
+            }
 
 #if SUPER_LOGGING
             Debug.Log("Loading Labels: " + labels);
 #endif
-			var op = Addressables.LoadAssetsAsync<UnityEngine.Object>(Keys.ToArray(), result =>
+            var op = Addressables.LoadAssetsAsync<UnityEngine.Object>(Keys, result =>
             {
+                ProcessedItems.Add(result);
                 ProcessNewItem(result, true, keepLoaded);
-            }, Addressables.MergeMode.Union);
-
-			if (!keepLoaded)
-			{
+            }, Addressables.MergeMode.Union, true);
+            if (!keepLoaded)
+            {
                 string info = "";
                 foreach (string s in Keys)
                     info += Keys + "; ";
-				LoadedItems.Add(new CachedOp(op,info));
-			}
-			return op;
-		}
+                LoadedItems.Add(new CachedOp(op, info));
+            }
+            return op;
+        }
 #endif
+
+        private void RemoveItem(UnityEngine.Object ob)
+        {
+            if (!IsIndexedType(ob.GetType()))
+                return;
+            System.Type ot = ob.GetType();
+            System.Type theType = TypeToLookup[ot];
+            Dictionary<string, AssetItem> TypeDic = GetAssetDictionary(theType);
+
+            string Name = AssetItem.GetEvilName(ob);
+
+            if (TypeDic.ContainsKey(Name))
+            {
+                TypeDic.Remove(Name);
+            }
+            if (GuidTypes.ContainsKey(Name))
+            {
+                GuidTypes.Remove(Name);
+            }
+        }
 
         public void ProcessNewItem(UnityEngine.Object result, bool isAddressable, bool keepLoaded)
         {
@@ -1198,7 +1254,6 @@ namespace UMA
 
         public void UnloadAll(bool forceResourceUnload)
 		{
-            Debug.Log("Unloading ALL AsyncOperationHandle in Indexer.UnloadAll()");
 
             foreach (CachedOp op in LoadedItems)
 			{
@@ -1383,6 +1438,10 @@ namespace UMA
 
 
 #if UNITY_EDITOR
+                if (string.IsNullOrWhiteSpace(ai._Name))
+                {
+                    throw new Exception("Invalid name on Asset type "+ai._Type.ToString()+" - asset is: "+ai.Item.name);
+                }
                 if (ai.IsAddressable)
                 {
                     ai._SerializedItem = null;
@@ -1402,15 +1461,21 @@ namespace UMA
 #endif
                 if (!string.IsNullOrEmpty(ai._Guid))
                 {
-                    if (GuidTypes.ContainsKey(ai._Guid))
+                    if (!GuidTypes.ContainsKey(ai._Guid))
                     {
-                        return false;
+                        GuidTypes.Add(ai._Guid, ai);
                     }
-                    GuidTypes.Add(ai._Guid, ai);
                 }
 #endif
 
-                TypeDic.Add(ai._Name, ai);
+                if (!TypeDic.ContainsKey(ai._Name))
+                {
+                    TypeDic.Add(ai._Name, ai);
+                }
+                else
+                {
+                    // warning?
+                }
             }
             catch (System.Exception ex)
             {
@@ -1520,7 +1585,7 @@ namespace UMA
             {
 				AssetItem ai = TypeDic[Name];
 				TypeDic.Remove(Name);
-                GuidTypes.Remove(Name);
+                GuidTypes.Remove(ai._Guid);
 				if (theType == typeof(UMAWardrobeRecipe))
 				{
 					// remove it from the race lookup.

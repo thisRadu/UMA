@@ -55,7 +55,7 @@ namespace UMA
 			}
 		}
 
-			public void DrawAllRects(RenderTexture target, int width, int height, Color background = default(Color))
+			public void DrawAllRects(RenderTexture target, int width, int height, Color background = default(Color), bool sharperFitTextures=true)
 		{
 			if (textureMergeRects != null)
 			{
@@ -69,7 +69,7 @@ namespace UMA
 
 				for (int i = 0; i < textureMergeRectCount; i++)
 				{
-					DrawRect(ref textureMergeRects[i]);
+					DrawRect(ref textureMergeRects[i], sharperFitTextures);
 				}
 
 				GL.PopMatrix();
@@ -83,8 +83,10 @@ namespace UMA
 			GL.MultMatrix(newMat);
 		}
 
-		private void DrawRect(ref TextureMergeRect tr)
+		private void DrawRect(ref TextureMergeRect tr,bool sharperFitTextures)
 		{
+			if (tr.tex == null)
+				return;
 			if (tr.transform)
 			{
 				// rotate texture here?
@@ -95,6 +97,15 @@ namespace UMA
 				Matrix4x4 newMat = Matrix4x4.TRS(pivotPoint, Quaternion.Euler(0, 0, tr.rotation), tr.scale) * Matrix4x4.TRS(-pivotPoint, Quaternion.identity, Vector3.one);		
 
 				GL.MultMatrix(newMat);
+			}
+
+			if (sharperFitTextures)
+			{
+				tr.tex.mipMapBias = -1.0f;
+			}
+			else
+            {
+				tr.tex.mipMapBias = 0f;
 			}
 
 			Graphics.DrawTexture(tr.rect, tr.tex, tr.mat);
@@ -139,6 +150,7 @@ namespace UMA
 					}
 					break;
 			}
+			RenderTexture.active = null;
 			RenderTexture.ReleaseTemporary(source);
 		}
 
@@ -173,12 +185,14 @@ namespace UMA
 
 		private void SetupMaterial(ref TextureMergeRect textureMergeRect, UMAData.MaterialFragment source, int textureType)
 		{
+			if (source.isNoTextures)
+				return;
 			camBackgroundColor = source.GetMultiplier(0, textureType);
 			camBackgroundColor.a = 0.0f;
 
 			textureMergeRect.tex = source.baseOverlay.textureList[textureType];
 
-			switch (source.slotData.asset.material.channels[textureType].channelType)
+			switch (source.slotData.material.channels[textureType].channelType)
 			{
 				case UMAMaterial.ChannelType.NormalMap:
 					textureMergeRect.mat.shader = normalShader;
@@ -201,15 +215,18 @@ namespace UMA
 
 		public void SetupModule(UMAData.MaterialFragment source, int textureType)
 		{
-			textureMergeRects[textureMergeRectCount].rect = source.atlasRegion;
-			textureMergeRects[textureMergeRectCount].rect.y = height - textureMergeRects[textureMergeRectCount].rect.y - textureMergeRects[textureMergeRectCount].rect.height;
-			atlasRect = textureMergeRects[textureMergeRectCount].rect;
-			SetupMaterial(ref textureMergeRects[textureMergeRectCount], source, textureType);
+			if (!source.isNoTextures)
+			{
+				textureMergeRects[textureMergeRectCount].rect = source.atlasRegion;
+				textureMergeRects[textureMergeRectCount].rect.y = height - textureMergeRects[textureMergeRectCount].rect.y - textureMergeRects[textureMergeRectCount].rect.height;
+				atlasRect = textureMergeRects[textureMergeRectCount].rect;
+				SetupMaterial(ref textureMergeRects[textureMergeRectCount], source, textureType);
+			}
 			textureMergeRectCount++;
 		}
 
 		Rect atlasRect;
-		float resolutionScale;
+		Vector2 resolutionScale;
 		int height;
 		public void SetupModule(UMAData.GeneratedMaterial atlas, int idx, int textureType)
 		{
@@ -219,6 +236,9 @@ namespace UMA
 			height = Mathf.FloorToInt(atlas.cropResolution.y);
 			SetupModule(atlasElement, textureType);
 			resolutionScale = atlas.resolutionScale * atlasElement.slotData.overlayScale;
+
+			if (atlasElement.overlays == null)
+				return;
 
 			for (int i2 = 0; i2 < atlasElement.overlays.Length; i2++)
 			{
@@ -230,12 +250,13 @@ namespace UMA
 		{
 			if (source.overlays[OverlayIndex] == null) return;
 			if (source.overlays[OverlayIndex].textureList[textureType] == null) return;
+			if (source.isNoTextures) return;
 
 			Rect overlayRect;
 
             if (source.rects[OverlayIndex].width != 0)
 			{
-				overlayRect = new Rect(atlasRect.xMin + source.rects[OverlayIndex].x * resolutionScale, atlasRect.yMax - source.rects[OverlayIndex].y * resolutionScale - source.rects[OverlayIndex].height * resolutionScale, source.rects[OverlayIndex].width * resolutionScale, source.rects[OverlayIndex].height * resolutionScale);
+				overlayRect = new Rect(atlasRect.xMin + source.rects[OverlayIndex].x * resolutionScale.x, atlasRect.yMax - source.rects[OverlayIndex].y * resolutionScale.y - source.rects[OverlayIndex].height * resolutionScale.y, source.rects[OverlayIndex].width * resolutionScale.x, source.rects[OverlayIndex].height * resolutionScale.y);
             }
             else
             {
@@ -267,7 +288,7 @@ namespace UMA
 
 			if (source.overlays[i2].overlayType == OverlayDataAsset.OverlayType.Normal)
 			{
-				switch (source.slotData.asset.material.channels[textureType].channelType)
+				switch (source.slotData.material.channels[textureType].channelType)
 				{
 					case UMAMaterial.ChannelType.NormalMap:
 						textureMergeRect.mat.shader = normalShader;

@@ -199,6 +199,16 @@ namespace UMA
             
 		}
 
+        public void OnDestroy()
+        {
+			meshData.FreeBoneWeights();
+        }
+
+		public void OnDisable()
+		{
+			meshData.FreeBoneWeights();
+		}
+
 		public int GetTextureChannelCount(UMAGeneratorBase generator)
 		{
 			return material.channels.Length;
@@ -239,7 +249,7 @@ namespace UMA
 				// already loaded. just return.
 				return;
             }
-			if (meshData.SerializedBoneWeights != null && meshData.SerializedBoneWeights.Length > 0)
+			if (meshData.ManagedBoneWeights != null && meshData.ManagedBoneWeights.Length > 0)
             {
 				meshData.LoadVariableBoneWeights();
             }
@@ -248,11 +258,6 @@ namespace UMA
 				meshData.LoadBoneWeights();
 			}
 		}
-
-        public void OnDisable()
-        {
-			meshData.FreeBoneWeights();
-        }
 
         public void UpdateMeshData()
 		{

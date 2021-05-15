@@ -39,6 +39,7 @@ namespace UMA
         {
             Atlas = 1,
             NoAtlas = 2,
+            UseExistingTexture = 4
         }
 
         public enum ChannelType
@@ -65,7 +66,7 @@ namespace UMA
 			new Color(0,0,0,0),
 			new Color(0,0,0,0),
 			new Color(0,0,0,0),
-			new Color(0.5f,0.5f,1,0.5f)
+			new Color(0,0,0,0)
 		};
 
         [Serializable]
@@ -89,7 +90,6 @@ namespace UMA
 			UMA.CustomAssetUtility.CreateAsset<UMAMaterial>();
 		}
 #endif
-
 		/// <summary>
 		/// Is the UMAMaterial based on a procedural material (substance)?
 		/// </summary>
@@ -102,6 +102,15 @@ namespace UMA
 
 			return false;
 		}
+
+        public bool IsEmpty
+        {
+            get
+            {
+                if (channels == null) return true;
+                return channels.Length == 0;
+            }
+        }
 
         /// <summary>
         /// Checks if UMAMaterials are effectively equal.

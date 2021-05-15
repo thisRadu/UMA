@@ -2,6 +2,7 @@ using UnityEngine;
 using System;
 using System.Collections.Generic;
 using UnityEngine.Serialization;
+using UMA.CharacterSystem;
 
 namespace UMA
 {
@@ -19,6 +20,7 @@ namespace UMA
 	public partial class RaceData : ScriptableObject, INameProvider, ISerializationCallbackReceiver
 	{
 	    public string raceName;
+		public List<string> KeepBoneNames = new List<string>();
 
         #region INameProvider
         public string GetAssetName()
@@ -96,6 +98,22 @@ namespace UMA
 				}
 			}
 			return Names;
+		}
+
+		public void ResetDNA()
+		{
+			foreach (IDNAConverter converter in dnaConverterList)
+			{
+				if (converter is DynamicDNAConverterController)
+				{
+					var c = converter as DynamicDNAConverterController;
+					for (int i=0;i<c.PluginCount;i++)
+                    {
+						DynamicDNAPlugin ddp = c.GetPlugin(i);
+						ddp.Reset();
+                    }
+				}
+			}
 		}
 
 		/// <summary>

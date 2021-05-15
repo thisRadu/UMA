@@ -33,6 +33,16 @@ namespace UMA
 		/// </summary>
 		public List<ColorComponentAdjuster> colorComponentAdjusters = new List<ColorComponentAdjuster>();
 
+		/// <summary>
+		/// Empty overlays do not get added to an atlas. 
+		/// But their meshes do get combined, and properties on the
+		/// shader do get set. 
+		/// </summary>
+		public bool isEmpty
+        {
+			get { return asset.textureCount == 0; }
+        }
+
 		// Properties dependant on the underlying asset.
 		public bool isProcedural { get { return asset.material.IsProcedural(); } }
 		public string overlayName { get { return asset.overlayName; } }
@@ -86,7 +96,7 @@ namespace UMA
 		{
 			get
 			{
-				#if (UNITY_STANDALONE || UNITY_IOS || UNITY_ANDROID || UNITY_PS4 || UNITY_XBOXONE) && !UNITY_2017_3_OR_NEWER //supported platforms for procedural materials
+#if (UNITY_STANDALONE || UNITY_IOS || UNITY_ANDROID || UNITY_PS4 || UNITY_XBOXONE) && !UNITY_2017_3_OR_NEWER //supported platforms for procedural materials
 				if (this.isProcedural)
 				{
 					ProceduralMaterial material = asset.material.material as ProceduralMaterial;
@@ -102,8 +112,10 @@ namespace UMA
 						return 0;
 					}
 				}
-                #endif
+#endif
 
+				if (asset.textureList == null || asset.textureList.Length == 0 || asset.textureList[0] == null)
+					return 0;
 				return asset.textureList[0].width * asset.textureList[0].height;
 			}
 		}
@@ -112,14 +124,14 @@ namespace UMA
 		/// Color data for material channels.
 		/// </summary>
 		[System.NonSerialized]
-		public OverlayColorData colorData;
+		public OverlayColorData colorData = new OverlayColorData(1);
 
 		/// <summary>
 		/// Is this instance of an overlay transformed?
 		/// Be very careful! improper use could result in overflowing the texture on the atlas!
 		/// </summary>
 		public bool instanceTransformed;
-		public Vector3 Scale;
+		public Vector3 Scale = Vector3.one;
 		[Range(0.0f,360.0f)]
 		public float Rotation;
 
@@ -193,6 +205,7 @@ namespace UMA
             {
 				return;
             }
+			if (isEmpty)  return;
 			if (asset.material == null)
 			{
 				asset.material = UMAAssetIndexer.Instance.GetAsset<UMAMaterial>(asset.materialName);
@@ -225,7 +238,15 @@ namespace UMA
 
 			Validate();
 
-			if (asset.material.name != targetMaterial.name)
+			if (asset.material == null)
+            {
+#if UNITY_EDITOR
+				Debug.LogError(string.Format("Overlay '{0}' doesn't have a UMA Material assigned. {1}", asset.overlayName, UnityEditor.AssetDatabase.GetAssetPath(asset)));
+#endif
+				return false;
+			}
+
+			if ((asset.material != null) && (asset.material.name != targetMaterial.name))
 			{
 				if (asset.material != targetMaterial)
 				{
@@ -238,6 +259,9 @@ namespace UMA
 					}
 				}
 			}
+
+			if (isEmpty)
+				return true;
 
 			if (asset.textureCount != targetMaterial.channels.Length)
 			{
@@ -274,14 +298,11 @@ namespace UMA
 				System.Array.Resize(ref colorData.channelMask, targetMaterial.channels.Length);
 				System.Array.Resize(ref colorData.channelAdditiveMask, targetMaterial.channels.Length);
 
-				for (int i = oldsize; i > targetMaterial.channels.Length; i++)
+				for (int i = oldsize; i < targetMaterial.channels.Length; i++)
 				{
 					colorData.channelMask[i] = Color.white;
-					colorData.channelAdditiveMask[i] = Color.black;
+					colorData.channelAdditiveMask[i] = new Color32(0, 0, 0, 0);
 				}
-
-				if (Debug.isDebugBuild)
-					Debug.LogWarning(string.Format("Overlay '{0}' missing required color data. Resizing and adding defaults", asset.overlayName));
 			}
 
 			return valid;
